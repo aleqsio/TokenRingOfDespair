@@ -46,13 +46,17 @@ def getCurrentNodeId():
     return currentNode[0] + ":" + str(currentNode[1])
 
 
+def getNextNodeId():
+    return nextNode[0] + ":" + str(nextNode[1])
+
+
 def generateInitPacket():
     return {
         "type": common.PacketType.INIT.value,
         "initNodeDescription": nodeDescription,
         # we use ip:port tuple as ids rather than nodeDescription to allow us to dynamically add clients
         "initNodeAddress": getOwnIp() + ":" + ownPort,
-        "nextNodeAddress": nextNode,
+        "nextNodeAddress": getNextNodeId(),
     }
 
 
@@ -132,13 +136,15 @@ def receive():
 
 
 def handleInitPacket(token):
-    global currentNode
+    global nextNode
     if token["initNodeAddress"] == getCurrentNodeId():
         return None
     devicesInRing[token["initNodeAddress"]] = token["initNodeDescription"]
     log("discovered new device on network, have " + str(len(devicesInRing)) + " devices")
-    if token["nextNodeAddress"] == getCurrentNodeId():
-        currentNode = (token["initNodeAddress"].split(":")[0], int(token["initNodeAddress"].split(":")[1]))
+    print(token["nextNodeAddress"] + getNextNodeId())
+    if token["nextNodeAddress"] == getNextNodeId():
+        log("updating next node")
+        nextNode = (token["initNodeAddress"].split(":")[0], int(token["initNodeAddress"].split(":")[1]))
     return token
 
 
@@ -240,11 +246,13 @@ def mainLoop():
 
     generateRandomMsg()
 
+def setup():
+    if protocol == common.ConnectionType.UDP:
+        setupUdpClient()
+    else:
+        setupTcpClient()
 
-if protocol == common.ConnectionType.UDP:
-    setupUdpClient()
-else:
-    setupTcpClient()
+setup()
 initPacket = generateInitPacket()
 send(initPacket)
 

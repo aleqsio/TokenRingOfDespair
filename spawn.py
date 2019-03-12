@@ -14,6 +14,14 @@ for i in range(count):
              "true " if i == 0 else "false ", protocol]), shell=True)
     processes.append(p)
 
+time.sleep(3)
+
+p = subprocess.Popen(
+        "".join(
+            ["python client.py client", str(count), " ", str(count + offset), " localhost:", str(offset), " ",
+             "true " if i == 0 else "false ", protocol]), shell=True)
+processes.append(p)
+
 
 def exit_handler(a, b):
     for p in processes:
