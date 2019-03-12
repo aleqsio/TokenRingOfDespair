@@ -13,7 +13,8 @@ import threading
 
 fake = Faker('pl_PL')
 
-LOGGER_IP = ""
+LOGGER_IP = "localhost"
+LOGGER_PORTS = [9000,9001]
 MULTIPLIER = 3 # for timeout token regen
 
 [_, nodeDescription, ownPort, nextNode, hasToken, protocol] = sys.argv
@@ -61,6 +62,7 @@ def generateInitPacket():
         "nextNodeAddress": getNextNodeId(),
     }
 
+
 def generateBreakupPacket(joiningNodeAddress):
     return {
         "type": common.PacketType.BREAKUP.value,
@@ -104,11 +106,11 @@ def resetupTCP():
     nextNodeSocket.close()
     nextNodeSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     nextNodeSocket.connect(nextNode)
-    log("resetup tcp"+getNextNodeId())
+    log("rewiring for new")
 
 
 def send(dataDict):
-    if random.randrange(0, 50000000) == 0:
+    if random.randrange(0, 500) == 0 and False: #change to trigger random drop sim
         log("dropping the token")
         return  # to simulate network loss
     msg = json.dumps(dataDict).encode("utf8")
@@ -170,6 +172,9 @@ def handleInitPacket(token):
 
 def log(msg):
     print(getCurrentNodeId() + " says " + msg)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    for p in LOGGER_PORTS:
+        sock.sendto(bytes(getCurrentNodeId() + " says " + msg, "utf-8"), (LOGGER_IP, p))
 
 
 def updateTime():
@@ -282,18 +287,12 @@ def mainLoop():
 
 def waitForNewClient():
     global prevNodeSocket
-    log("waiting for new client")
     newClientSocket, newPrevNode = prevNodeSocketServer.accept()
     currInitPacket = receive(newClientSocket, True)
-
+    log("a new client requested to join")
     send(generateBreakupPacket(currInitPacket["initNodeAddress"]))
     send(currInitPacket)
-
     prevNodeSocket = newClientSocket
-
-
-
-
 
 
 def setup():
