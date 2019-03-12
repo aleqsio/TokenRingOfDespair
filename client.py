@@ -9,6 +9,7 @@ import struct
 import random
 import datetime
 from faker import Faker
+import threading
 
 fake = Faker('pl_PL')
 
@@ -35,6 +36,7 @@ def getOwnIp():
 nextNode = (nextIp, int(nextPort))
 nextNodeSocket = None
 prevNodeSocket = None
+prevNodeSocketServer = None
 prevNode = None
 devicesInRing = dict()
 currentNode = (getOwnIp(), int(ownPort))
@@ -59,6 +61,13 @@ def generateInitPacket():
         "nextNodeAddress": getNextNodeId(),
     }
 
+def generateBreakupPacket(joiningNodeAddress):
+    return {
+        "type": common.PacketType.BREAKUP.value,
+        "nodeAddress": getCurrentNodeId(),
+        "joiningNodeAddress": joiningNodeAddress,
+    }
+
 
 def generateRandomMsg():
     if random.randrange(0, 4) == 0 and len(devicesInRing) > 0:
@@ -75,18 +84,27 @@ def setupUdpClient():
 
 
 def setupTcpClient():
-    global nextNodeSocket, prevNode, prevNodeSocket
+    global nextNodeSocket, prevNode, prevNodeSocket,prevNodeSocketServer
 
-    prevNodeSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    prevNodeSocket.bind(currentNode)
-    prevNodeSocket.listen()
+    prevNodeSocketServer = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    prevNodeSocketServer.bind(currentNode)
+    prevNodeSocketServer.listen(5)
     nextNodeSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     time.sleep(1)
-    if hasToken:
-        nextNodeSocket.connect(nextNode)
-    prevNodeSocket, prevNode = prevNodeSocket.accept()
     if not hasToken:
         nextNodeSocket.connect(nextNode)
+        send(generateInitPacket())
+    prevNodeSocket, prevNode = prevNodeSocketServer.accept()
+    if hasToken:
+        nextNodeSocket.connect(nextNode)
+
+
+def resetupTCP():
+    global nextNodeSocket
+    nextNodeSocket.close()
+    nextNodeSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    nextNodeSocket.connect(nextNode)
+    log("resetup tcp"+getNextNodeId())
 
 
 def send(dataDict):
@@ -99,32 +117,32 @@ def send(dataDict):
         nextNodeSocket.sendto(msg, nextNode)
     else:
         msgWithLen = struct.pack('>I', len(msg)) + msg
-        nextNodeSocket.send(msgWithLen)
+        nextNodeSocket.sendall(msgWithLen)
 
 
-def recvLen(size):
+def recvLen(size, currSocket):
     global prevNode
     data = b''
     while len(data) < size:
-        packet = prevNodeSocket.recv(size - len(data))
+        packet = currSocket.recv(size - len(data))
         if not packet:
             return None
         data += packet
     return data
 
 
-def receive():
+def receive(currSocket, noTimeout=False):
     global timeWhenLastTokenWentThrough, prevNode
-    prevNodeSocket.settimeout(timeout * MULTIPLIER * random.uniform(1,10)) #
     try:
+        currSocket.settimeout(None if noTimeout else timeout * MULTIPLIER * random.uniform(1, 10))
         if protocol == common.ConnectionType.TCP:
-            structLength = recvLen(4)
+            structLength = recvLen(4, currSocket)
             if not structLength:
                 return None
             length = struct.unpack('>I', structLength)[0]
-            data = recvLen(length)
+            data = recvLen(length, currSocket)
         else:
-            data, prevNode = prevNodeSocket.recvfrom(2048)
+            data, prevNode = currSocket.recvfrom(2048)
         try:
             token = json.loads(data.decode("utf-8"))
         except ValueError:
@@ -133,6 +151,9 @@ def receive():
     except socket.timeout:
         timeWhenLastTokenWentThrough = datetime.datetime.now()
         return "timeout"
+    except OSError:  # this happens when we close the pipe in another thread
+        if protocol == common.ConnectionType.TCP:
+            return
 
 
 def handleInitPacket(token):
@@ -141,7 +162,6 @@ def handleInitPacket(token):
         return None
     devicesInRing[token["initNodeAddress"]] = token["initNodeDescription"]
     log("discovered new device on network, have " + str(len(devicesInRing)) + " devices")
-    print(token["nextNodeAddress"] + getNextNodeId())
     if token["nextNodeAddress"] == getNextNodeId():
         log("updating next node")
         nextNode = (token["initNodeAddress"].split(":")[0], int(token["initNodeAddress"].split(":")[1]))
@@ -215,6 +235,16 @@ def getEmptyTokenFromToken(token):
     }
 
 
+def handleBreakupPacket(packet):
+    global nextNode, prevNode
+    if packet["nodeAddress"] == getNextNodeId():
+        nextNodeSocket.close()
+        nextNode = (packet["joiningNodeAddress"].split(":")[0], int(packet["joiningNodeAddress"].split(":")[1]))
+        resetupTCP()
+    else:
+        return packet
+
+
 def exit_handler(a, b):
     nextNodeSocket.close()
     prevNodeSocket.close()
@@ -225,13 +255,16 @@ signal.signal(signal.SIGTERM, exit_handler)
 
 
 def mainLoop():
-    token = receive()
+    token = receive(prevNodeSocket)
     if token is None:
         return
     if token is "timeout":
         send(generateToken())
     else:
         updatedToken = None
+        if token["type"] == common.PacketType.BREAKUP.value:
+            updatedToken = handleBreakupPacket(token)
+            updateTime()
         if token["type"] == common.PacketType.INIT.value:
             updatedToken = handleInitPacket(token)
             updateTime()
@@ -246,16 +279,35 @@ def mainLoop():
 
     generateRandomMsg()
 
+
+def waitForNewClient():
+    global prevNodeSocket
+    log("waiting for new client")
+    newClientSocket, newPrevNode = prevNodeSocketServer.accept()
+    currInitPacket = receive(newClientSocket, True)
+
+    send(generateBreakupPacket(currInitPacket["initNodeAddress"]))
+    send(currInitPacket)
+
+    prevNodeSocket = newClientSocket
+
+
+
+
+
+
 def setup():
     if protocol == common.ConnectionType.UDP:
         setupUdpClient()
     else:
         setupTcpClient()
 
+
 setup()
 initPacket = generateInitPacket()
 send(initPacket)
-
+if protocol == common.ConnectionType.TCP:
+    threading.Thread(target=waitForNewClient).start()
 log("sent init msg")
 if hasToken:
     send(generateToken())

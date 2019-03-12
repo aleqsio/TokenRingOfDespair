@@ -9,3 +9,4 @@ class ConnectionType(Enum):
 class PacketType(Enum):
     INIT = 0
     TOKEN = 1
+    BREAKUP = 2
