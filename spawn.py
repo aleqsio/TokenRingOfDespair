@@ -2,7 +2,7 @@ import time, subprocess, signal
 import random
 
 processes = []
-protocol = "udp"
+protocol = "tcp"
 offset = 5100 + random.randrange(0,
                                  100) * 10
 # to avoid issues with https://stackoverflow.com/questions/12458019/shutting-down-sockets-properly

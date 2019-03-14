@@ -174,7 +174,10 @@ def log(msg):
     print(getCurrentNodeId() + " says " + msg)
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     for p in LOGGER_PORTS:
-        sock.sendto(bytes(getCurrentNodeId() + " says " + msg, "utf-8"), (LOGGER_IP, p))
+        try:
+            sock.sendto(bytes(getCurrentNodeId() + " says " + msg, "utf-8"), (LOGGER_IP, p))
+        except ConnectionRefusedError:
+            return
 
 
 def updateTime():
@@ -197,12 +200,16 @@ def handleToken(token):
     if "msg" not in token:
         return fillTokenWithMsgIfAvailable(token)
     if token["senderId"] == getCurrentNodeId():
-        log("a message did a roundtrip")
+        if "read" in token:
+            return getEmptyTokenFromToken(token)
+        else:
+            log("a message did a roundtrip")
         return getEmptyTokenFromToken(token)
     if token["recipientId"] == getCurrentNodeId():
         receivedMessages.append((token["senderId"], token["msg"]))
         log("received msg " + token["msg"] + " from " + token["senderId"])
-        return getEmptyTokenFromToken(token)
+        token["read"] = True
+        return token
     return token
 
 
